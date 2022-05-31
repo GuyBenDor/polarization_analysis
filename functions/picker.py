@@ -12,12 +12,14 @@ import pandas as pd
 from functions.baseFunctions import find_nearest, mat_rotation, make_array,traces
 import threading
 
+matplotlib.rcParams['keymap.quit'].remove('cmd+w')
 matplotlib.rcParams.update(
     {
         "keymap.pan": "z",
         "keymap.save": "p"
     }
 )
+
 cursor_colors = ["tab:green", "tab:blue", "tab:red"]
 DEBOUNCE_DUR = 0.5
 t = None
@@ -26,6 +28,9 @@ status_values = {
     1: "P",
     2: "S"
 }
+
+key_list = list(status_values.keys())
+val_list = list(status_values.values())
 
 class VerticalLine:
 
@@ -36,6 +41,12 @@ class VerticalLine:
         self.obj = st
         self.rotAngle = 0
         self.status = 0
+        self.pca_pick_view = "S"
+        if not hasattr(self,'pca_extent_init'):
+            self.pca_extent_init = [-0.5, 0.2]
+
+        self.pca_extent = self.pca_extent_init
+
         self.pick_level = status_values[self.status]
         self.picking_levels = [self.pick_level] + self.karnelPickNames["P"] + self.karnelPickNames["S"]
         self.kwargs = kwargs
@@ -70,8 +81,9 @@ class VerticalLine:
 
         self.saveTextBox.set_visible(False)
 
-        plt.subplots_adjust(hspace=0)
-        plt.suptitle(self.obj.st.stats.event)
+        # plt.subplots_adjust(hspace=0)
+        self.axes[0].set_title(self.obj.st.stats.event,x=0.1,y=1.1)
+        # plt.subplots_adjust(bottom=0.)
 
     def plot_traces_in_figure(self, **kwargs):
 
@@ -112,7 +124,7 @@ class VerticalLine:
                 temp.append(pl)
             self.pickLines.append(temp)
             self.ls.append(l)
-            self.axes[i].annotate(self.obj.st.stats.instrument[:-1] + self.obj.st.stats.columnNames[1:].split(",")[i],
+            self.axes[i].annotate(self.obj.st.stats.instrument[:-1] + self.obj.st.stats.columnNames[i],
                                   xy=(0, 0), xytext=(0.1, 0.9), fontsize=10,
                                   xycoords='axes fraction', textcoords='axes fraction',
                                   bbox=dict(facecolor='white', alpha=0.8),
@@ -172,26 +184,23 @@ class VerticalLine:
         self.rotation_line, = self.axes[3].plot([], [], [], "cyan", alpha=0.7)
         # print(self.eventPicks_tst.pickTime.isnull()[1])
         # if self.eventPicks_tst.Phase.is_null()#[self.eventPicks_tst.Phase=="S"].
-        if not self.eventPicks_tst.pickTime.isnull()[1]:
-            pickTime = self.eventPicks_tst[self.eventPicks_tst.Phase == "S"].iloc[0].pickTime
+        self.spans = []
+        if not self.eventPicks_tst.pickTime.isnull()[key_list[val_list.index(self.pca_pick_view)-1]]:
+            pickTime = self.eventPicks_tst[self.eventPicks_tst.Phase == self.pca_pick_view].iloc[0].pickTime
             inx = find_nearest(self.data[4].astype("datetime64[ms]"), np.datetime64(pickTime))
             self.update_pm(inx)
 
-        # if "S" in self.eventPicks.Phase.values:
-        #     pickTime = self.eventPicks[self.eventPicks.Phase=="S"].iloc[0].pickTime
-        #     inx = find_nearest(self.data[4].astype("datetime64[ms]"), np.datetime64(pickTime))
-        #     self.particle_motion(inx)
-            # print(inx)
-
     def update_pm(self, inx):
+
+        self.update_span(inx)
 
         first_motion = self.filter_data[
                  :3, inx: inx + int(self.time_for_pca * self.obj.st.stats.sampling_rate)
                  ]
         motion = self.filter_data[
-                           :3, inx - 100: inx + int((self.time_for_pca + 0.2) * self.obj.st.stats.sampling_rate)
+                           :3, inx + int(self.obj.st.stats.sampling_rate * self.pca_extent[0]):
+                               inx + int((self.time_for_pca + self.pca_extent[1]) * self.obj.st.stats.sampling_rate)
                            ]
-
         self.figlim = 1.1 * np.sqrt((motion ** 2).sum(axis=0)).max()
         zeros = np.zeros([2, 3])
         zeros[0, 0] = self.figlim * np.sin(np.radians([self.rotAngle]))
@@ -220,10 +229,16 @@ class VerticalLine:
 
     def set_buttons(self, **kwargs):
         save_bot_pos = [0.94, 0.25+0.035*len(self.picking_levels), 0.035, 0.035]
-        rest_bot_pos = [0.865, 0.91, 0.035, 0.025]
         pick_bot_pos = [0.94, 0.25, 0.035, 0.035*len(self.picking_levels)]
-        filt_range_pos = [0.4, 0.89, 0.5, 0.02]
         rotation_range_pos = [0.92, 0.15, 0.02, 0.7]
+
+        pca_range_pos = [0.15, 0.04, 0.7, 0.02]
+        filt_range_pos = [0.15, 0.01, 0.7, 0.02]  # [0.4, 0.89, 0.5, 0.02]
+
+        rest_bot_pos_ex = [0.05, 0.04, 0.035, 0.02]
+        rest_bot_pos = [0.05, 0.01, 0.035, 0.02]
+
+        pca_view_pos = [0.05, 0.07, 0.035, 0.06]
 
         axcolor = 'lightgoldenrodyellow'
 
@@ -232,6 +247,11 @@ class VerticalLine:
         self.filt_ax = plt.axes(filt_range_pos)
         self.rot_ax = plt.axes(rotation_range_pos)
         self.reset_ax = plt.axes(rest_bot_pos)
+        self.reset_ax_extent = plt.axes(rest_bot_pos_ex)
+        self.pca_range_ax = plt.axes(pca_range_pos)
+        self.pca_view_ax = plt.axes(pca_view_pos,facecolor=axcolor)
+        # self.pca_view_ax_title = plt.axes([0.05, 0.13, 0.035, 0.03],facecolor=axcolor)
+        self.pca_view_ax.text(-0.04,1.1,"pm view")
 
         self.filt_rangeSlider = RangeSlider(
             self.filt_ax, "filter", 0.2, 50, valinit=self.orig_filterValues, orientation="horizontal", valstep=0.1
@@ -252,10 +272,25 @@ class VerticalLine:
         self.reset_button = Button(self.reset_ax, 'Reset', hovercolor='0.975')
         self.reset_button.label.set_fontsize(8)
 
+        self.reset_button1 = Button(self.reset_ax_extent, 'Reset', hovercolor='0.975')
+        self.reset_button1.label.set_fontsize(8)
+
+        self.pca_rangeSlider = RangeSlider(
+            self.pca_range_ax, "pca time", -2, 2,
+            valinit=self.pca_extent_init, orientation="horizontal",
+            valstep=1/self.obj.st.stats.sampling_rate
+        )
+
+        self.pca_view_buttons = RadioButtons(self.pca_view_ax, ["  P", "  S"],active=1)
+        for circle, label in zip(self.pca_view_buttons.circles, self.pca_view_buttons.labels):
+            circle.set_radius(0.1)
+            label.set_fontsize(10)
+
     def set_interaction(self, **kwargs):
         self.t = None
         self.picking = self.picking_buttons.on_clicked(self.set_pick_status)
         self.filter = self.filt_rangeSlider.on_changed(self.update_filter)
+        self.pca_range_extent = self.pca_rangeSlider.on_changed(self.update_pca_extent)
         self.rotation = self.rotation_slider.on_changed(self.update_rotation)
         self.multi = MultiCursor(
             self.fig.canvas, (self.axes[0], self.axes[1], self.axes[2]), color=cursor_colors[self.status], lw=1
@@ -264,6 +299,8 @@ class VerticalLine:
         self.connection_id = self.fig.canvas.mpl_connect('button_press_event', self.onclick)
         self.c4 = self.fig.canvas.mpl_connect('key_press_event', self.onpresskey)
         self.c5 = self.reset_button.on_clicked(self.reset)
+        self.c6 = self.reset_button1.on_clicked(self.reset_extent)
+        self.c7 = self.pca_view_buttons.on_clicked(self.phase_view)
         plt.show()
 
     def set_pick_status(self, event):
@@ -282,10 +319,14 @@ class VerticalLine:
     def onpresskey(self, event):
         if event.key == '§' or (event.key == 'z' and self.picking_buttons.get_active != 0):
             self.picking_buttons.set_active(0)
-        elif event.key == "cmd+s":
+        elif (event.key == "cmd+s") or (event.key == "ctrl+s"):
             self.save_data_frame(event)
         elif event.key.isdigit() and int(event.key) in range(1, len(self.picking_levels)):
             self.picking_buttons.set_active(int(event.key))
+        elif (event.key == "cmd+w") or (event.key == "ctrl+w"):
+            self.pca_view_buttons.set_active(0)
+        elif (event.key == "cmd+e") or (event.key == "ctrl+e"):
+            self.pca_view_buttons.set_active(1)
 
     def get_picks_in_stream(self):
         # print(len(self.pick_df))
@@ -331,6 +372,9 @@ class VerticalLine:
         self.filt_rangeSlider.set_val(self.orig_filterValues)
         # self.filt_rangeSlider.reset()
 
+    def reset_extent(self, event):
+        self.pca_rangeSlider.set_val(self.pca_extent_init)
+
     def remove_notify_dataSave(self):
         self.saveTextBox.set_visible(False)
         self.axes[2].figure.canvas.draw_idle()
@@ -365,7 +409,7 @@ class VerticalLine:
                 ['plt_num', 'pickTime', 'confidence', "d2n", "lineCol"]] = ser.values()
             self.plot_lineCollection()
             r = 3
-            if self.status == 2:
+            if (self.status==1 and self.pca_pick_view == "P") or (self.status == 2 and self.pca_pick_view == "S"):
                 inx = find_nearest(self.data[4].astype("datetime64[ms]"), np.datetime64(ser['pickTime']))
                 self.update_pm(inx)
 
@@ -422,12 +466,37 @@ class VerticalLine:
         self.update_data()
         for i in range(3):
             self.ls[i].set_ydata(self.data[i])
-        if not self.eventPicks_tst.pickTime.isnull()[1]:
-            pickTime = self.eventPicks_tst[self.eventPicks_tst.Phase == "S"].iloc[0].pickTime
+        if not self.eventPicks_tst.pickTime.isnull()[key_list[val_list.index(self.pca_pick_view)-1]]:
+            pickTime = self.eventPicks_tst[self.eventPicks_tst.Phase == self.pca_pick_view].iloc[0].pickTime
             inx = find_nearest(self.data[4].astype("datetime64[ms]"), np.datetime64(pickTime))
             self.update_pm(inx)
         # self.plot_motion_in_figure()
         # self.fig.canvas.draw_idle()
+
+    def update_span(self, inx):
+        lower_lim = self.data[-1, inx + int(self.obj.st.stats.sampling_rate * self.pca_extent[0])]
+        upper_lim = self.data[
+            -1, inx + int(self.obj.st.stats.sampling_rate * (self.time_for_pca + self.pca_extent[1]))]
+        if len(self.spans) == 0:
+            pass
+        else:
+            for s in self.spans[::-1]:
+                s.remove()
+                self.spans.remove(s)
+        for i in range(3):
+            span = self.axes[i].axvspan(
+                lower_lim.astype("datetime64[ms]"),
+                upper_lim.astype("datetime64[ms]"),
+                alpha=0.1, color='green'
+            )
+            self.spans.append(span)
+
+    def update_pca_extent(self, val):
+        self.pca_extent = val
+        if not self.eventPicks_tst.pickTime.isnull()[key_list[val_list.index(self.pca_pick_view)-1]]:
+            pickTime = self.eventPicks_tst[self.eventPicks_tst.Phase == self.pca_pick_view].iloc[0].pickTime
+            inx = find_nearest(self.data[4].astype("datetime64[ms]"), np.datetime64(pickTime))
+            self.update_pm(inx)
 
     def update_rotation(self, val):
         self.rotAngle = val
@@ -447,6 +516,14 @@ class VerticalLine:
 
         self.fig.canvas.draw_idle()
 
+    def phase_view(self,event):
+        self.pca_pick_view = event.strip()
+        if not self.eventPicks_tst.pickTime.isnull()[key_list[val_list.index(self.pca_pick_view)-1]]:
+            pickTime = self.eventPicks_tst[self.eventPicks_tst.Phase == self.pca_pick_view].iloc[0].pickTime
+            inx = find_nearest(self.data[4].astype("datetime64[ms]"), np.datetime64(pickTime))
+            self.update_pm(inx)
+        plt.draw()
+
     @classmethod
     def set_karnelPickNames(cls,Pvalues, Svalues):
         cls.karnelPickNames = {
@@ -465,6 +542,10 @@ class VerticalLine:
     @classmethod
     def set_stream_length(cls, times):
         cls.stream_length = times
+
+    @classmethod
+    def set_pca_extent(cls, Min, Max):
+        cls.pca_extent_init = [-Min, Max]
 
     @classmethod
     def set_save_path(cls, save_path):
@@ -541,3 +622,7 @@ class Figure:
     @classmethod
     def set_station(cls, station):
         VerticalLine.get_picksOfStation(station)
+
+    @classmethod
+    def set_pca_extent(cls,Min,Max):
+        VerticalLine.set_pca_extent(Min,Max)
